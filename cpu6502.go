@@ -112,7 +112,8 @@ func (cpu CPU6502) getFlag(flag uint8) bool {
 
 //gets data for the cpu and sets the fetchedData value to what was gotten
 func (cpu *CPU6502) fetchData() {
-
+	if cpu.instructions[cpu.opCode] == 
+	cpu.fetchedData = cpu.read(cpu.addrAbs, false)
 }
 
 //these four functions can occur at any point in operation, and will go after the current instruction is complete
@@ -126,6 +127,8 @@ func (cpu *CPU6502) clock() {
 
 	cpu.cycles--
 }
+
+//cpu interrupts
 
 //resets the cpu
 func (cpu *CPU6502) reset() {
@@ -176,3 +179,153 @@ func ABS(cpu *CPU6502) uint8 {
 	return 0
 }
 
+//zero page addressing, the second byte is the offset from the first page of the memory
+//there is a glitch, replicated from original hardware where values that should go to the next page wrap back around, but shouldn't occur in this zero page mode because it only reads in one byte
+func ZPI(cpu *CPU6502) uint8 {
+	byte := cpu.read(cpu.pc, false)
+	cpu.pc++
+
+	//wraps address that goes to the next page back around to the zero page
+	cpu.addrAbs = uint16(byte) & 255
+	return 0
+}
+
+//zero page addressing with X register offset, the second byte is the offset from the first page of the memory
+//there is a glitch, replicated from original hardware where values that should go to the next page wrap back around
+func ZPX(cpu *CPU6502) uint8 {
+	byte := cpu.read(cpu.pc, false)
+	cpu.pc++
+	byte += cpu.x
+
+	//wraps address that goes to the next page back around to the zero page
+	cpu.addrAbs = uint16(byte) & 255
+	return 0
+}
+
+//zero page addressing with Y register offset, the second byte is the offset from the first page of the memory
+//there is a glitch, replicated from original hardware where values that should go to the next page wrap back around
+func ZPY(cpu *CPU6502) uint8 {
+	byte := cpu.read(cpu.pc, false)
+	cpu.pc++
+	byte += cpu.y
+
+	//wraps address that goes to the next page back around to the zero page
+	cpu.addrAbs = uint16(byte) & 255
+	return 0
+}
+
+//absolute addressing with x register offset, the second byte is the offset from the first page of the memory
+//there is a glitch, replicated from original hardware where values that should go to the next page wrap back around
+func ABX(cpu *CPU6502) uint8 {
+	low := cpu.read(cpu.pc, false)
+	cpu.pc++
+	hi := cpu.read(cpu.pc, false)
+	cpu.pc++
+
+	//combine into one number
+	var data uint16 = (uint16(hi)<<8 | uint16(low)) + uint16(cpu.x)
+
+	cpu.addrAbs = data
+
+	//checks if the page increased, if so the clock cycle count needs to increase
+	if uint16(hi)<<8 != data&0xff00 {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+//absolute addressing with Y register offset, the second byte is the offset from the first page of the memory
+//there is a glitch, replicated from original hardware where values that should go to the next page wrap back around
+func ABY(cpu *CPU6502) uint8 {
+	low := cpu.read(cpu.pc, false)
+	cpu.pc++
+	hi := cpu.read(cpu.pc, false)
+	cpu.pc++
+
+	//combine into one number
+	var data uint16 = (uint16(hi)<<8 | uint16(low)) + uint16(cpu.y)
+
+	cpu.addrAbs = data
+
+	//checks if the page increased, if so the clock cycle count needs to increase
+	if uint16(hi)<<8 != data&0xff00 {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+//relative addressing, the second byte is added to the program counter for branching
+func REL(cpu *CPU6502) uint8 {
+	offset := uint16(cpu.read(cpu.pc, false))
+	cpu.pc++
+
+	//if the number is 128 or greater unsigned, convert it to the 2's complement 16 digit version
+	if offset >= 128 {
+		offset |= 0xff00
+	}
+
+	cpu.addrRel = offset
+
+	//will always increase the cycle, up to the function that calls this address mode to see if it goes to another page or not to determine the final increase
+	return 1
+}
+
+//indexed indirect addressing, the second byte in the instruction is added to the X register without the carry, which is the low byte of the effective address, which is found on page zero, the following byte is the high byte, both on page zero
+func IDX(cpu *CPU6502) uint8 {
+	addr := cpu.read(cpu.pc, false)
+	cpu.pc++
+
+	//adds them as uint8 so the carry is discarded
+	addr += cpu.x
+
+	low := cpu.read(uint16(addr)&0x00ff, false)
+	hi := cpu.read((uint16(addr)+1)&0x00ff, false)
+
+	cpu.addrAbs = uint16(uint16(hi)<<8 | uint16(low))
+	return 0
+}
+
+//indirect indexed addressing, the second byte in the instruction is added to the Y register, which is the low byte of the effective address, which is found on page zero, the following byte added with the carry of the last addition is the high byte, both on page zero
+func IDY(cpu *CPU6502) uint8 {
+	addr := cpu.read(cpu.pc, false)
+	cpu.pc++
+
+	low := cpu.read(uint16(addr&0x00ff), false)
+	hi := cpu.read(uint16((addr+1)&0x00ff), false)
+
+	//adds them as uint16 so the carry remains
+	cpu.addrAbs = (uint16(hi)<<8 | uint16(low)) + uint16(cpu.y)
+
+	//checks if the page increased, if so the clock cycle count needs to increase
+	if uint16(hi)<<8 != cpu.addrAbs&0xff00 {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+//absolute indirect addressing, the second byte in the instruction is the low byte of a memory location, the third instruction byte is the high byte, the data at that memory location is the low byte of the effective address, and the following byte is the effective high byte
+//has a hardware bug where instead of going to the next page, it will wrap when forming the effective address, replicated here
+func IND(cpu *CPU6502) uint8 {
+	low := cpu.read(cpu.pc, false)
+	cpu.pc++
+	hi := cpu.read(cpu.pc, false)
+	cpu.pc++
+
+	addr := uint16(hi)<<8 | uint16(low)
+
+	addrLow := cpu.read(addr, false)
+	addrHi := cpu.read((addr + 1), false)
+
+	//replicates the wrapping glitch, if the low byte is 0xff, then it wraps back to 0 on the same page instead of advancing
+	if low == 0xff {
+		addrHi = cpu.read(uint16(hi)<<8, false)
+	}
+
+	cpu.addrAbs = uint16(uint16(addrHi)<<8 | uint16(addrLow))
+	return 0
+}
+
+//opcodes

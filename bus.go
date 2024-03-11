@@ -25,5 +25,6 @@ func (bus Bus) read(addr uint16, readOnly bool) uint8 {
 		return bus.ram[addr]
 	}
 
+	//if there is an issue with the bounds just return 0
 	return 0x0000
 }
