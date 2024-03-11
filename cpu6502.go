@@ -140,17 +140,80 @@ func (cpu *CPU6502) clock() {
 
 //resets the cpu
 func (cpu *CPU6502) reset() {
+	cpu.a = 0
+	cpu.x = 0
+	cpu.y = 0
+	//resets the stack pointer to the greatest value, should wrap around so shouldn't particularly matter where it's set but this makes sense
+	cpu.sptr = 0xff
+	cpu.status = 0
+	//make sure this is always set
+	cpu.setFlag(U, true)
 
+	//default location to look for data when the cpu is reset
+	//program counter low byte = 0xfffc, high byte = 0xfffd
+	cpu.pc = (uint16(cpu.read(0xfffc, false)) << 8) | uint16(cpu.read(0xfffd, false))
+
+	cpu.addrAbs = 0
+	cpu.addrRel = 0
+	cpu.fetchedData = 0
+
+	//time it takes to reset
+	cpu.cycles = 8
 }
 
 //interrupt request, can be ignored depending on the interrupt flag of the status register
 func (cpu *CPU6502) irq() {
+	//checks if interrupts are disabled, if so escapes
+	if !cpu.getFlag(I) {
+		return
+	}
 
+	//store the program counter on the stack, both bytes, little endian
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0xff00))
+	cpu.sptr--
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
+	cpu.sptr--
+
+	//break flag
+	cpu.setFlag(B, false)
+	//unused, making sure its set
+	cpu.setFlag(U, true)
+	//interrupt flag
+	cpu.setFlag(I, true)
+
+	//write the new status to the stack
+	cpu.write(0x0100+uint16(cpu.sptr), cpu.status)
+
+	//moves program counter to known location after interrupt
+	cpu.pc = uint16(cpu.read(0xfffe, false))<<8 | uint16(cpu.read(0xffff, false))
+
+	//time taken
+	cpu.cycles = 7
 }
 
 //non maskable interrupt request, unable to be ignored
 func (cpu *CPU6502) nmi() {
+	//store the program counter on the stack, both bytes, little endian
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0xff00))
+	cpu.sptr--
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
+	cpu.sptr--
 
+	//break flag
+	cpu.setFlag(B, false)
+	//unused, making sure its set
+	cpu.setFlag(U, true)
+	//interrupt flag
+	cpu.setFlag(I, true)
+
+	//write the new status to the stack
+	cpu.write(0x0100+uint16(cpu.sptr), cpu.status)
+
+	//moves program counter to known location after interrupt
+	cpu.pc = uint16(cpu.read(0xfffa, false))<<8 | uint16(cpu.read(0xfffb, false))
+
+	//time taken
+	cpu.cycles = 8
 }
 
 //addressing mode
@@ -270,6 +333,7 @@ func REL(cpu *CPU6502) uint8 {
 	cpu.pc++
 
 	//if the number is 128 or greater unsigned, convert it to the 2's complement 16 digit version
+	//because adresses are 16 bits, it needs to be converted when the value goes into the negative
 	if offset >= 128 {
 		offset |= 0xff00
 	}
@@ -370,6 +434,161 @@ func ADC(cpu *CPU6502) uint8 {
 
 	//set the accumulator register to the new value
 	cpu.a = uint8(res & 0x00ff)
+
+	return 0
+}
+
+//and, operates on memory and accumulator
+func AND(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	cpu.a &= cpu.fetchedData
+
+	//zero flag
+	cpu.setFlag(Z, cpu.a == 0)
+	//negative flag
+	cpu.setFlag(N, cpu.a&0x80 == 0x80)
+
+	return 0
+}
+
+//asl, arithmetic shift left, shifts left one bit, memory or accumulator
+func ASL(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	temp := uint16(cpu.fetchedData << 1)
+
+	//if it is in accumulator mode, write to it, otherwise write the shift to the memory location
+	if cpu.instructions[cpu.opCode].modeType == "ACC" {
+		cpu.a = uint8(temp & 0xff)
+	} else {
+		cpu.write(cpu.addrAbs, uint8(temp&0xff))
+	}
+
+	//carry flag
+	cpu.setFlag(C, uint8(temp&0xff00) > 0)
+	//zero flag
+	cpu.setFlag(Z, uint8(temp&0xff) == 0)
+	//negative flag
+	cpu.setFlag(N, uint8(temp&0xff)&0x80 == 0x80)
+
+	return 0
+}
+
+//bcc, branch if carry clear, if the carry flag is clear, branch to the location as specified in the instruction
+func BCC(cpu *CPU6502) uint8 {
+	if !cpu.getFlag(C) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+//bcs, branch if carry set, if the carry flag is set, branch to the location as specified in the instruction
+func BCS(cpu *CPU6502) uint8 {
+	if cpu.getFlag(C) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+//beq, branch if equal/branch if zero, if the zero flag is set, branch to the location as specified in the instruction
+func BEQ(cpu *CPU6502) uint8 {
+	if cpu.getFlag(Z) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+//bit, bit test, the accumulator is ANDed with the supplied memory value and sets/clears the N and V flags
+func BIT(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	and := cpu.fetchedData & cpu.a
+
+	//zero flag
+	cpu.setFlag(Z, and == 0)
+	//overflow flag
+	cpu.setFlag(V, and&0x40 == 0x40)
+	//negative flag
+	cpu.setFlag(N, and&0x80 == 0x80)
+
+	return 0
+}
+
+//bmi, branch if minus, if the negative flag is set branch to location
+func BMI(cpu *CPU6502) uint8 {
+	if cpu.getFlag(N) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+//bne, branch not equal/branch if not zero, if the zero flag is not set, branch to the location as specified in the instruction
+func BNE(cpu *CPU6502) uint8 {
+	if !cpu.getFlag(Z) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+//bpl, branch if positive, if the negative flag is not set, branch to the location as specified in the instruction
+func BPL(cpu *CPU6502) uint8 {
+	if !cpu.getFlag(N) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
 
 	return 0
 }
