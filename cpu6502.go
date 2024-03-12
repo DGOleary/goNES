@@ -409,7 +409,7 @@ func NEX(cpu *CPU6502) uint8 {
 	return 0
 }
 
-//add with carry, from specified memory to accumulator
+//adc, add with carry, from specified memory to accumulator
 func ADC(cpu *CPU6502) uint8 {
 	cpu.fetchData()
 
@@ -1082,6 +1082,186 @@ func ROR(cpu *CPU6502) uint8 {
 
 		cpu.write(cpu.addrAbs, mem)
 	}
+
+	return 0
+}
+
+//rti, return from interrupt, used at the end of an interrupt, retrieves the status and the program counter from the stack
+func RTI(cpu *CPU6502) uint8 {
+	cpu.sptr++
+	cpu.status = cpu.read(0x0100+uint16(cpu.sptr), false)
+	cpu.sptr++
+	//little endian, so low byte is on the smaller address
+	low := cpu.read(0x0100+uint16(cpu.sptr), false)
+	cpu.sptr++
+	hi := cpu.read(0x0100+uint16(cpu.sptr), false)
+
+	cpu.pc = uint16(hi)<<8 | uint16(low)
+
+	return 0
+}
+
+//rts, return from subroutine, retreives the program counter from the stack, and advances to the next instruction
+func RTS(cpu *CPU6502) uint8 {
+	cpu.sptr++
+	//little endian, so low byte is on the smaller address
+	low := cpu.read(0x0100+uint16(cpu.sptr), false)
+	cpu.sptr++
+	hi := cpu.read(0x0100+uint16(cpu.sptr), false)
+
+	cpu.pc = uint16(hi)<<8 | uint16(low)
+
+	cpu.pc++
+	return 0
+}
+
+//sbc, subtract with carry, from specified memory to accumulator
+func SBC(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	carryFlag := 0
+
+	if cpu.getFlag(C) {
+		carryFlag = 1
+	}
+
+	//subtracts the supplied memory byte from the accumulator
+	res := uint16(cpu.a) - uint16(cpu.fetchedData) - ^uint16(carryFlag)
+
+	//carry flag
+	cpu.setFlag(C, res&0xff > 0)
+	//zero flag
+	cpu.setFlag(Z, res == 0)
+
+	//overflow flag
+	//checks if both values are negative and it wrapped to positive
+	if (0x0080&cpu.a&cpu.fetchedData == 0x0080) && 0x0080&res == 0 {
+		cpu.setFlag(V, true)
+	}
+	//checks if both values are positive and it wrapped to negative
+	if ((^(cpu.a | cpu.fetchedData) & 0x0080) == 0x0080) && 0x0080&res == 0x0080 {
+		cpu.setFlag(V, true)
+	}
+
+	//negative flag
+	cpu.setFlag(N, 0x0080&res == 0x0080)
+
+	//set the accumulator register to the new value
+	cpu.a = uint8(res & 0x00ff)
+
+	return 0
+}
+
+//sec, set carry flag, sets carry flag
+func SEC(cpu *CPU6502) uint8 {
+	cpu.setFlag(C, true)
+
+	return 0
+}
+
+//sed, set decimal flag, sets decimal flag
+func SED(cpu *CPU6502) uint8 {
+	cpu.setFlag(D, true)
+
+	return 0
+}
+
+//sei, set interrupt flag, sets interrupt flag
+func SEI(cpu *CPU6502) uint8 {
+	cpu.setFlag(I, true)
+
+	return 0
+}
+
+//sta, store accumulator, stores accumulator to memory
+func STA(cpu *CPU6502) uint8 {
+	cpu.write(cpu.addrAbs, cpu.a)
+
+	return 0
+}
+
+//stx, store x register, stores x register to memory
+func STX(cpu *CPU6502) uint8 {
+	cpu.write(cpu.addrAbs, cpu.x)
+
+	return 0
+}
+
+//sty, store y register, stores y register to memory
+func STY(cpu *CPU6502) uint8 {
+	cpu.write(cpu.addrAbs, cpu.y)
+
+	return 0
+}
+
+//tax, transfer accumulator to x, copies the accumulator to the x register, sets zero and negative flags if needed
+func TAX(cpu *CPU6502) uint8 {
+	cpu.x = cpu.a
+
+	//zero flag
+	cpu.setFlag(Z, uint8(cpu.x&0xff) == 0)
+	//negative flag
+	cpu.setFlag(N, uint8(cpu.x&0xff)&0x80 == 0x80)
+
+	return 0
+}
+
+//tay, transfer accumulator to y, copies the accumulator to the y register, sets zero and negative flags if needed
+func TAY(cpu *CPU6502) uint8 {
+	cpu.y = cpu.a
+
+	//zero flag
+	cpu.setFlag(Z, uint8(cpu.y&0xff) == 0)
+	//negative flag
+	cpu.setFlag(N, uint8(cpu.y&0xff)&0x80 == 0x80)
+
+	return 0
+}
+
+//tsx, transfer stack pointer to x, copies the stack pointer to the x register, sets zero and negative flags if needed
+func TSX(cpu *CPU6502) uint8 {
+	cpu.x = cpu.sptr
+
+	//zero flag
+	cpu.setFlag(Z, uint8(cpu.x&0xff) == 0)
+	//negative flag
+	cpu.setFlag(N, uint8(cpu.x&0xff)&0x80 == 0x80)
+
+	return 0
+}
+
+//txa, transfer x to accumulator, copies the x register to the accumulator, sets zero and negative flags if needed
+func TXA(cpu *CPU6502) uint8 {
+	cpu.a = cpu.x
+
+	//zero flag
+	cpu.setFlag(Z, uint8(cpu.a&0xff) == 0)
+	//negative flag
+	cpu.setFlag(N, uint8(cpu.a&0xff)&0x80 == 0x80)
+
+	return 0
+}
+
+//txs, transfer x to stack pointer, copies the x register to the stack pointer
+func TXS(cpu *CPU6502) uint8 {
+	cpu.sptr = cpu.x
+
+	//zero flag
+	cpu.setFlag(Z, uint8(cpu.sptr&0xff) == 0)
+	//negative flag
+	cpu.setFlag(N, uint8(cpu.sptr&0xff)&0x80 == 0x80)
+
+	return 0
+}
+
+//tya, transfer y to accumulator, copies the y register to the accumulator, sets zero and negative flags if needed
+func TYA(cpu *CPU6502) uint8 {
+	cpu.a = cpu.y
+
+	//zero flag
+	cpu.setFlag(Z, uint8(cpu.a&0xff) == 0)
+	//negative flag
+	cpu.setFlag(N, uint8(cpu.a&0xff)&0x80 == 0x80)
 
 	return 0
 }
