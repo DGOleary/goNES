@@ -183,6 +183,7 @@ func (cpu *CPU6502) irq() {
 
 	//write the new status to the stack
 	cpu.write(0x0100+uint16(cpu.sptr), cpu.status)
+	cpu.sptr--
 
 	//moves program counter to known location after interrupt
 	cpu.pc = uint16(cpu.read(0xfffe, false))<<8 | uint16(cpu.read(0xffff, false))
@@ -208,6 +209,7 @@ func (cpu *CPU6502) nmi() {
 
 	//write the new status to the stack
 	cpu.write(0x0100+uint16(cpu.sptr), cpu.status)
+	cpu.sptr--
 
 	//moves program counter to known location after interrupt
 	cpu.pc = uint16(cpu.read(0xfffa, false))<<8 | uint16(cpu.read(0xfffb, false))
@@ -402,6 +404,11 @@ func IND(cpu *CPU6502) uint8 {
 
 //opcodes
 
+//nex, non-existent, placeholder put in to represent unspecified opcodes, more detail can later be put in to give the unspecified opcodes that get used their functionality, for now does nothing
+func NEX(cpu *CPU6502) uint8 {
+	return 0
+}
+
 //add with carry, from specified memory to accumulator
 func ADC(cpu *CPU6502) uint8 {
 	cpu.fetchData()
@@ -454,23 +461,32 @@ func AND(cpu *CPU6502) uint8 {
 
 //asl, arithmetic shift left, shifts left one bit, memory or accumulator
 func ASL(cpu *CPU6502) uint8 {
-	cpu.fetchData()
-
-	temp := uint16(cpu.fetchedData << 1)
-
 	//if it is in accumulator mode, write to it, otherwise write the shift to the memory location
 	if cpu.instructions[cpu.opCode].modeType == "ACC" {
-		cpu.a = uint8(temp & 0xff)
+		//carry flag
+		cpu.setFlag(C, cpu.a&0x0080 == 0x0080)
+		cpu.a = cpu.a << 1
+		//zero flag
+		cpu.setFlag(Z, uint8(cpu.a&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(cpu.a&0xff)&0x80 == 0x80)
 	} else {
-		cpu.write(cpu.addrAbs, uint8(temp&0xff))
-	}
+		//memory mode
+		cpu.fetchData()
+		mem := cpu.fetchedData
 
-	//carry flag
-	cpu.setFlag(C, uint8(temp&0xff00) > 0)
-	//zero flag
-	cpu.setFlag(Z, uint8(temp&0xff) == 0)
-	//negative flag
-	cpu.setFlag(N, uint8(temp&0xff)&0x80 == 0x80)
+		//carry flag
+		cpu.setFlag(C, mem&0x0080 == 0x0080)
+
+		mem = mem << 1
+
+		//zero flag
+		cpu.setFlag(Z, uint8(mem&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(mem&0xff)&0x80 == 0x80)
+
+		cpu.write(cpu.addrAbs, mem)
+	}
 
 	return 0
 }
@@ -588,6 +604,483 @@ func BPL(cpu *CPU6502) uint8 {
 		} else {
 			return 0
 		}
+	}
+
+	return 0
+}
+
+//brk, break, generates an interrupt, stores the pc to the stack and sets the pc to 0xfffe and 0xffff and sets the break flag
+func BRK(cpu *CPU6502) uint8 {
+	//store the program counter on the stack, both bytes, little endian
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0xff00))
+	cpu.sptr--
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
+	cpu.sptr--
+
+	//break flag
+	cpu.setFlag(B, true)
+
+	//write the new status to the stack
+	cpu.write(0x0100+uint16(cpu.sptr), cpu.status)
+	cpu.sptr--
+
+	//break flag set to 0 after status was pushed
+	cpu.setFlag(B, false)
+
+	//moves program counter to known location after interrupt
+	cpu.pc = uint16(cpu.read(0xfffe, false))<<8 | uint16(cpu.read(0xffff, false))
+
+	return 0
+}
+
+//bvc, branch if overflow is clear, if the overflow flag is not set branch to location
+func BVC(cpu *CPU6502) uint8 {
+	if !cpu.getFlag(V) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+//bvs, branch if overflow is set, if the overflow flag is set branch to location
+func BVS(cpu *CPU6502) uint8 {
+	if cpu.getFlag(V) {
+		org := cpu.pc
+		cpu.pc += cpu.addrRel
+
+		//checks if the offset went to another page, if so return the other cycle increment
+		if (org & 0xff00) != (cpu.pc & 0xff00) {
+			return 1
+		} else {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+//clc, clears the carry flag
+func CLC(cpu *CPU6502) uint8 {
+	cpu.setFlag(C, false)
+	return 0
+}
+
+//cld, clears the decimal mode flag, should be set to 0 anyways
+func CLD(cpu *CPU6502) uint8 {
+	cpu.setFlag(D, false)
+	return 0
+}
+
+//cli, clears the interrupt disable flag
+func CLI(cpu *CPU6502) uint8 {
+	cpu.setFlag(I, false)
+	return 0
+}
+
+//clv, clears the overflow flag
+func CLV(cpu *CPU6502) uint8 {
+	cpu.setFlag(V, false)
+	return 0
+}
+
+//cmp, compare, sets the zero and carry flags appropriately with a compare between the accumulator and a memory value
+func CMP(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	//carry flag, set if a >= m
+	cpu.setFlag(C, cpu.a >= cpu.fetchedData)
+
+	//zero, set if a - m == 0, 8 bit
+	cpu.setFlag(Z, cpu.a-cpu.fetchedData == 0)
+
+	//negative flag, set if a - m < 0
+	cpu.setFlag(N, (cpu.a-cpu.fetchedData)&0x80 == 0x80)
+	return 0
+}
+
+//cpx, compare with x register, sets the zero and carry flags appropriately with a compare between the x register and a memory value
+func CPX(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	//carry flag, set if a >= m
+	cpu.setFlag(C, cpu.x >= cpu.fetchedData)
+
+	//zero, set if a - m == 0, 8 bit
+	cpu.setFlag(Z, cpu.x-cpu.fetchedData == 0)
+
+	//negative flag, set if a - m < 0
+	cpu.setFlag(N, (cpu.x-cpu.fetchedData)&0x80 == 0x80)
+	return 0
+}
+
+//cpy, compare with y register, sets the zero and carry flags appropriately with a compare between the y register and a memory value
+func CPY(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	//carry flag, set if a >= m
+	cpu.setFlag(C, cpu.y >= cpu.fetchedData)
+
+	//zero, set if a - m == 0, 8 bit
+	cpu.setFlag(Z, cpu.y-cpu.fetchedData == 0)
+
+	//negative flag, set if a - m < 0
+	cpu.setFlag(N, (cpu.y-cpu.fetchedData)&0x80 == 0x80)
+	return 0
+}
+
+//dec, decrement memory, decrement the memory value at the specific location by 1 and set the zero and negative flags if needed
+func DEC(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	dec := cpu.fetchedData - 1
+
+	//zero
+	cpu.setFlag(Z, dec == 0)
+
+	//negative flag
+	cpu.setFlag(N, dec&0x80 == 0x80)
+
+	cpu.write(cpu.addrAbs, dec)
+	return 0
+}
+
+//dex, decrement x register, decrement the x register by 1 and set the zero and negative flags if needed
+func DEX(cpu *CPU6502) uint8 {
+	cpu.x -= 1
+
+	//zero
+	cpu.setFlag(Z, cpu.x == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.x&0x80 == 0x80)
+
+	return 0
+}
+
+//dey, decrement y register, decrement the x register by 1 and set the zero and negative flags if needed
+func DEY(cpu *CPU6502) uint8 {
+	cpu.y -= 1
+
+	//zero
+	cpu.setFlag(Z, cpu.y == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.y&0x80 == 0x80)
+
+	return 0
+}
+
+//eor, exclusive or, xor's the accumulator with the provided memory value and set the zero and negative flags if needed
+func EOR(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	cpu.a ^= cpu.fetchedData
+
+	//zero
+	cpu.setFlag(Z, cpu.a == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.a&0x80 == 0x80)
+
+	return 0
+}
+
+//inc, increment memory, increment the memory value at the specific location by 1 and set the zero and negative flags if needed
+func INC(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	dec := cpu.fetchedData + 1
+
+	//zero
+	cpu.setFlag(Z, dec == 0)
+
+	//negative flag
+	cpu.setFlag(N, dec&0x80 == 0x80)
+
+	cpu.write(cpu.addrAbs, dec)
+	return 0
+}
+
+//inc, increment x register, increment x by 1 and set the zero and negative flags if needed
+func INX(cpu *CPU6502) uint8 {
+	cpu.x += 1
+
+	//zero
+	cpu.setFlag(Z, cpu.x == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.x&0x80 == 0x80)
+
+	return 0
+}
+
+//inc, increment y register, increment y by 1 and set the zero and negative flags if needed
+func INY(cpu *CPU6502) uint8 {
+	cpu.y += 1
+
+	//zero
+	cpu.setFlag(Z, cpu.y == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.y&0x80 == 0x80)
+
+	return 0
+}
+
+//jmp, jump, jumps to the value specified by the operand by moving the program counter
+//wraparound glitch is handled in the addressing function
+func JMP(cpu *CPU6502) uint8 {
+	cpu.pc = cpu.addrAbs
+	return 0
+}
+
+//jsr, jump to subroutine, pushes the address minus one of the current point to the stack and then jumps to the value specified by the operand by moving the program counter
+func JSR(cpu *CPU6502) uint8 {
+	cpu.pc--
+
+	//write the high byte to stack
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc>>8))
+	cpu.sptr--
+	//write the low byte to stack
+	cpu.write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
+	cpu.sptr--
+
+	cpu.pc = cpu.addrAbs
+	return 0
+}
+
+//lda, load accumulator, loads byte of memory into accumulator, sets zero and negative flags if necessary
+func LDA(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	cpu.a = cpu.fetchedData
+
+	//zero
+	cpu.setFlag(Z, cpu.a == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.a&0x80 == 0x80)
+
+	return 0
+}
+
+//ldx, load x register, loads byte of memory into x register, sets zero and negative flags if necessary
+func LDX(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	cpu.x = cpu.fetchedData
+
+	//zero
+	cpu.setFlag(Z, cpu.x == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.x&0x80 == 0x80)
+
+	return 0
+}
+
+//ldy, load y register, loads byte of memory into y register, sets zero and negative flags if necessary
+func LDY(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	cpu.y = cpu.fetchedData
+
+	//zero
+	cpu.setFlag(Z, cpu.y == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.y&0x80 == 0x80)
+
+	return 0
+}
+
+//lsr, logical shift right, the accumulator or the given memory location is shifted to the right one bit, the 0 bit being but into the carry flag, the addressing mode specifies what is shifted
+func LSR(cpu *CPU6502) uint8 {
+	//if it is in accumulator mode, write to it, otherwise write the shift to the memory location
+	if cpu.instructions[cpu.opCode].modeType == "ACC" {
+		//carry flag
+		cpu.setFlag(C, cpu.a&1 == 1)
+		cpu.a = cpu.a >> 1
+		//zero flag
+		cpu.setFlag(Z, uint8(cpu.a&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(cpu.a&0xff)&0x80 == 0x80)
+	} else {
+		//memory mode
+		cpu.fetchData()
+
+		mem := cpu.fetchedData
+
+		//carry flag
+		cpu.setFlag(C, mem&1 == 1)
+		mem = mem >> 1
+		//zero flag
+		cpu.setFlag(Z, uint8(mem&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(mem&0xff)&0x80 == 0x80)
+
+		cpu.write(cpu.addrAbs, mem)
+	}
+
+	return 0
+}
+
+//nop, no operation, simply passes and lets the clock function increment the program counter, unspecified opcodes can cause a nop to have slightly different behavior, but currently unimplemented
+func NOP(cpu *CPU6502) uint8 {
+	return 0
+}
+
+//ora, logical inclusive or, or's the accumulator with the specified byte in memory, sets zero and negative flags if needed
+func ORA(cpu *CPU6502) uint8 {
+	cpu.fetchData()
+
+	cpu.a |= cpu.fetchedData
+
+	//zero
+	cpu.setFlag(Z, cpu.a == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.a&0x80 == 0x80)
+
+	return 0
+}
+
+//pha, push accumulator, pushes accumulator onto the stack
+func PHA(cpu *CPU6502) uint8 {
+	cpu.write(0x0100+uint16(cpu.sptr), cpu.a)
+	cpu.sptr--
+
+	return 0
+}
+
+//php, push processor status, pushes status onto the stack
+//some sources claim it will always push the B flag as 1? if errors happen this could be a potential source
+func PHP(cpu *CPU6502) uint8 {
+	cpu.write(0x0100+uint16(cpu.status), cpu.a)
+	cpu.sptr--
+
+	return 0
+}
+
+//pla, pull accumulator, pulls the top value from the stack onto the accumulator, sets the zero and negative flags if needed
+func PLA(cpu *CPU6502) uint8 {
+	cpu.sptr++
+	cpu.a = cpu.read(0x0100+uint16(cpu.sptr), false)
+
+	//zero
+	cpu.setFlag(Z, cpu.a == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.a&0x80 == 0x80)
+
+	return 0
+}
+
+//plp, pull processor status, pulls the top value from the stack onto the status register, sets the zero and negative flags if needed
+func PLP(cpu *CPU6502) uint8 {
+	cpu.sptr++
+	cpu.status = cpu.read(0x0100+uint16(cpu.sptr), false)
+
+	//zero
+	cpu.setFlag(Z, cpu.status == 0)
+
+	//negative flag
+	cpu.setFlag(N, cpu.status&0x80 == 0x80)
+
+	return 0
+}
+
+//rol, rotate left, rotates the accumulator or memory value one left, the old most significant bit becoming the carry, and the current carry becoming the least significant bit of the new value
+func ROL(cpu *CPU6502) uint8 {
+	//if it is in accumulator mode, write to it, otherwise write the shift to the memory location
+	if cpu.instructions[cpu.opCode].modeType == "ACC" {
+		//holds the value of the old carry
+		car := uint8(0)
+		if cpu.getFlag(C) {
+			car = 1
+		}
+
+		//carry flag
+		cpu.setFlag(C, cpu.a&0x0080 == 0x0080)
+		cpu.a = cpu.a << 1
+		cpu.a |= car
+		//zero flag
+		cpu.setFlag(Z, uint8(cpu.a&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(cpu.a&0xff)&0x80 == 0x80)
+	} else {
+		//memory mode
+		cpu.fetchData()
+		mem := cpu.fetchedData
+
+		//holds the value of the old carry
+		car := uint8(0)
+		if cpu.getFlag(C) {
+			car = 1
+		}
+
+		//carry flag
+		cpu.setFlag(C, mem&0x0080 == 0x0080)
+		mem = mem << 1
+		mem |= car
+		//zero flag
+		cpu.setFlag(Z, uint8(mem&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(mem&0xff)&0x80 == 0x80)
+
+		cpu.write(cpu.addrAbs, mem)
+	}
+
+	return 0
+}
+
+//ror, rotate right, rotates the accumulator or memory value one right, the old least significant bit becoming the carry, and the current carry becoming the most significant bit of the new value
+func ROR(cpu *CPU6502) uint8 {
+	//if it is in accumulator mode, write to it, otherwise write the shift to the memory location
+	if cpu.instructions[cpu.opCode].modeType == "ACC" {
+		//holds the value of the old carry
+		car := uint8(0)
+		if cpu.getFlag(C) {
+			car = 0x0080
+		}
+
+		//carry flag
+		cpu.setFlag(C, cpu.a&1 == 1)
+		cpu.a = cpu.a >> 1
+		cpu.a |= car
+		//zero flag
+		cpu.setFlag(Z, uint8(cpu.a&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(cpu.a&0xff)&0x80 == 0x80)
+	} else {
+		//memory mode
+		cpu.fetchData()
+		mem := cpu.fetchedData
+
+		//holds the value of the old carry
+		car := uint8(0)
+		if cpu.getFlag(C) {
+			car = 0x0080
+		}
+
+		//carry flag
+		cpu.setFlag(C, mem&1 == 1)
+		mem = mem >> 1
+		mem |= car
+		//zero flag
+		cpu.setFlag(Z, uint8(mem&0xff) == 0)
+		//negative flag
+		cpu.setFlag(N, uint8(mem&0xff)&0x80 == 0x80)
+
+		cpu.write(cpu.addrAbs, mem)
 	}
 
 	return 0

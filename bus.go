@@ -9,6 +9,7 @@ type Bus struct {
 
 func createBus() *Bus {
 	bus := Bus{}
+	bus.cpu = *createCPU()
 	bus.cpu.connectBus(&bus)
 	return &bus
 }
