@@ -6,5 +6,8 @@ import (
 )
 
 func main() {
-	fmt.Println()
+	bus := nes.CreateBus()
+
+	fmt.Println(bus)
+	fmt.Println(bus.CPU)
 }
