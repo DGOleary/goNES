@@ -25,6 +25,11 @@ func CreateBus() *Bus {
 
 // reads and writes from memory
 func (bus *Bus) CPUWrite(addr uint16, data uint8) {
+	//if it's for the cartridge, execute the action and exit the function
+	succ := bus.Cartridge.CPUWrite(addr, data)
+	if succ {
+		return
+	}
 	//area of memory for cpu
 	if addr >= 0x0000 && addr <= 0x1FFF {
 		//keeps the memory in range of the RAM dedicated to the cpu, mirrored every 2 KB
@@ -37,6 +42,11 @@ func (bus *Bus) CPUWrite(addr uint16, data uint8) {
 }
 
 func (bus Bus) CPURead(addr uint16, readOnly bool) uint8 {
+	//if it's for the cartridge, execute the action and exit the function
+	data, succ := bus.Cartridge.CPURead(addr, readOnly)
+	if succ {
+		return data
+	}
 	//area of memory for cpu
 	if addr >= 0x0000 && addr <= 0x1FFF {
 		//keeps the memory in range of the RAM dedicated to the cpu, mirrored every 2 KB
