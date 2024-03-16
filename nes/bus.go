@@ -61,23 +61,28 @@ func (bus Bus) CPURead(addr uint16, readOnly bool) uint8 {
 	return 0x0000
 }
 
-// reads and writes from ppu memory
-func (bus *Bus) PPUWrite(addr uint16, data uint8) {
-
-}
-
-func (bus Bus) PPURead(addr uint16, readOnly bool) uint8 {
-
-	return 0x0000
-}
-
 func (bus *Bus) InsertCartridge(cart *Cartridge) {
 	bus.Cartridge = cart
 	bus.PPU.ConnectCartridge(cart)
 }
 
 func (bus *Bus) Clock() {
+	//the PPU goes 3 times as fast as the CPU, so the PPU should run every frame and the CPU only run every 3rd
+	bus.PPU.Clock()
 
+	if bus.CycleCount%3 == 0 {
+		bus.CPU.Clock()
+	}
+
+	//check if the PPU threw an NMI
+	if bus.PPU.NMI {
+		//reset the boolean if it did, the rest of the console controls the bit in the PPU register, so if another one needs to happen it will set the boolean again
+		bus.PPU.NMI = false
+		//trigger an NMI in the CPU
+		bus.CPU.NMI()
+	}
+
+	bus.CycleCount++
 }
 
 func (bus *Bus) Reset() {

@@ -2,9 +2,21 @@ package nes
 
 import "os"
 
+//types of mirroring the cartridge can produce
+type Mirror uint8
+
+const (
+	HORIZONTAL Mirror = iota
+	VERTICAL
+	ONESCREEN_LO
+	ONESCREEN_HI
+)
+
 type Cartridge struct {
 	//what mapper is being used
 	MapperID uint8
+	//what type of mirroring the cartridge uses
+	Mirror Mirror
 	//how many banks of memory for each type of data
 	PRGBanks uint8
 	CHRBanks uint8
@@ -65,8 +77,16 @@ func createCartridge(filename string) *Cartridge {
 
 	//gets the mapper ID from the header data
 	cart.MapperID = (header.flag7 & 0xf0) | (header.flag6 >> 4)
+	//gets how the cartridge sets up mirroring for the nametable
+	//some mappers may use this header to set the mirroring in a different way, would need to overwrite this in the mapper
+	//TODO make sure mappers can adjust this
+	if header.flag6&0x01 == 0x01 {
+		cart.Mirror = VERTICAL
+	} else {
+		cart.Mirror = HORIZONTAL
+	}
 
-	//where to begin reading
+	//where to begin reading, default is to only skip the first 16 header bytes and begin at byte
 	begin := 17
 
 	//checks if the rom file has trainer data, a depreciated mapping translation used in early NES emulators
@@ -167,7 +187,7 @@ func (cart *Cartridge) CPURead(addr uint16, readOnly bool) (uint8, bool) {
 
 // reads and writes from ppu memory
 func (cart *Cartridge) PPUWrite(addr uint16, data uint8) bool {
-	mapAddr, succ := cart.AddressMapper.CPUMapWrite(addr)
+	mapAddr, succ := cart.AddressMapper.PPUMapWrite(addr)
 	//if the address was in the cartridge range, write the data and return that it was for the cartridge
 	if succ {
 		cart.CHRMemory[mapAddr] = data
@@ -178,7 +198,7 @@ func (cart *Cartridge) PPUWrite(addr uint16, data uint8) bool {
 }
 
 func (cart Cartridge) PPURead(addr uint16, readOnly bool) (uint8, bool) {
-	mapAddr, succ := cart.AddressMapper.CPUMapRead(addr)
+	mapAddr, succ := cart.AddressMapper.PPUMapRead(addr)
 	//if the address was in the cartridge range, return the data and return that it was for the cartridge
 	if succ {
 		return cart.CHRMemory[mapAddr], true
