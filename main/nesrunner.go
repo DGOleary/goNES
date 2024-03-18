@@ -26,6 +26,7 @@ func main() {
 	bus.InsertCartridge(cart)
 	//bus.CPU.SetPC()
 	bus.CPU.Reset()
+	bus.PPU.Reset()
 	window.Show()
 
 	renderer.Clear()
@@ -54,9 +55,10 @@ func main() {
 			bus.Clock()
 		}
 		bus.PPU.Complete = false
-		time.Sleep(100 * time.Millisecond)
+		fmt.Println("sleep")
+		time.Sleep(2 * time.Second)
 
-		renderer.Present()
+ 		renderer.Present()
 		//make sure to put PollEvent to a variable because the rendering thread can go to nil mid-check and cause a null reference error
 		event := sdl.PollEvent()
 		if event != nil && event.GetType() == sdl.QUIT {

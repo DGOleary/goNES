@@ -678,10 +678,10 @@ func (ppu *PPU2C02) Clock() {
 	ppu.Renderer.DrawPoint(int32(ppu.Cycle)-1, int32(ppu.Scanline))
 	//ppu.Renderer.Present()
 
-	// if ppu.Scanline > 0 && (ppu.Scanline%50 == 0 && ppu.Cycle%50 == 0) {
-	// 	temp := 0
-	// 	temp++
-	// }
+	if ppu.Scanline > 0 && (ppu.Scanline%50 == 0 && ppu.Cycle%50 == 0) && ppu.frame >= 3 {
+		temp := 0
+		temp++
+	}
 	ppu.Cycle++
 	//each scanline lasts for 341 PPU cycles
 	if ppu.Cycle >= 341 {

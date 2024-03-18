@@ -136,6 +136,7 @@ func (cpu *CPU6502) Clock() {
 	if cpu.cycles == 0 {
 		cpu.opCode = cpu.Read(cpu.pc, false)
 		cpu.pc++
+		//TODO OPCODE PRINTOUT HERE
 		fmt.Printf("%0x "+cpu.instructions[cpu.opCode].name+" %0x %0x\n", cpu.pc-1, cpu.Read(cpu.pc, false), cpu.Read(cpu.pc+1, false))
 		//get how many extra cycles in the address read and set the address
 		addrCycles := cpu.instructions[cpu.opCode].addrMode(cpu)
@@ -198,7 +199,7 @@ func (cpu *CPU6502) IRQ() {
 	cpu.sptr--
 
 	//moves program counter to known location after interrupt
-	cpu.pc = uint16(cpu.Read(0xffff, false)) | uint16(cpu.Read(0xfffe, false))<<8
+	cpu.pc = uint16(cpu.Read(0xffff, false))<<8 | uint16(cpu.Read(0xfffe, false))
 
 	//time taken
 	cpu.cycles = 7
@@ -224,7 +225,7 @@ func (cpu *CPU6502) NMI() {
 	cpu.sptr--
 
 	//moves program counter to known location after interrupt
-	cpu.pc = uint16(cpu.Read(0xfffb, false)) | uint16(cpu.Read(0xfffa, false))<<8
+	cpu.pc = uint16(cpu.Read(0xfffb, false))<<8 | uint16(cpu.Read(0xfffa, false))
 
 	//time taken
 	cpu.cycles = 8
@@ -442,10 +443,11 @@ func ADC(cpu *CPU6502) uint8 {
 	//checks if both values are negative and it wrapped to positive
 	if (0x0080&cpu.a&cpu.fetchedData == 0x0080) && 0x0080&res == 0 {
 		cpu.SetFlag(V, true)
-	}
-	//checks if both values are positive and it wrapped to negative
-	if ((^(cpu.a | cpu.fetchedData) & 0x0080) == 0x0080) && 0x0080&res == 0x0080 {
+	} else if ((^(cpu.a | cpu.fetchedData) & 0x0080) == 0x0080) && 0x0080&res == 0x0080 {
+		//checks if both values are positive and it wrapped to negative
 		cpu.SetFlag(V, true)
+	} else {
+		cpu.SetFlag(V, false)
 	}
 
 	//negative flag
