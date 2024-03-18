@@ -37,7 +37,7 @@ func (bus *Bus) CPUWrite(addr uint16, data uint8) {
 	}
 	//writes to the dedicated ppu memory
 	if addr >= 0x2000 && addr <= 0x3fff {
-		bus.PPU.PPUWrite(addr&0x0007, data)
+		bus.PPU.CPUWrite(addr&0x0007, data)
 	}
 }
 
@@ -54,7 +54,7 @@ func (bus Bus) CPURead(addr uint16, readOnly bool) uint8 {
 	}
 	if addr >= 0x2000 && addr <= 0x3fff {
 		//keeps the memory in range of the RAM dedicated to the cpu, mirrored every 2 KB
-		bus.PPU.PPURead(addr&0x0007, false)
+		return bus.PPU.CPURead(addr&0x0007, false)
 	}
 
 	//if there is an issue with the bounds just return 0

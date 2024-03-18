@@ -1,8 +1,11 @@
 package nes
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
-//types of mirroring the cartridge can produce
+// types of mirroring the cartridge can produce
 type Mirror uint8
 
 const (
@@ -32,7 +35,7 @@ type Cartridge struct {
 	AddressMapper Mapper
 }
 
-//struct that represents the header of an iNES file
+// struct that represents the header of an iNES file
 type iNESHeader struct {
 	//first 16 bytes, goes from byte 0 to byte 15
 	//constant header, "NES" followed by MS-DOS end of file character, 4 bytes
@@ -55,7 +58,7 @@ type iNESHeader struct {
 	pad []byte
 }
 
-func createCartridge(filename string) *Cartridge {
+func CreateCartridge(filename string) *Cartridge {
 	cart := Cartridge{}
 
 	//get header data and check if it was succesful
@@ -87,7 +90,7 @@ func createCartridge(filename string) *Cartridge {
 	}
 
 	//where to begin reading, default is to only skip the first 16 header bytes and begin at byte
-	begin := 17
+	begin := 16
 
 	//checks if the rom file has trainer data, a depreciated mapping translation used in early NES emulators
 	if header.flag6&4 == 4 {
@@ -136,6 +139,7 @@ func readHeader(filename string) *iNESHeader {
 
 	//handle potential error in reading file
 	if err != nil {
+		fmt.Println(err)
 		return nil
 	}
 	//executed when the surrounding function finishes

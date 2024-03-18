@@ -1,5 +1,7 @@
 package nes
 
+import "fmt"
+
 // constants representing the flags for the different values the status register can have
 // each constant is a different bit, so they can be combined in the status register to signal what flags are set
 const (
@@ -78,7 +80,6 @@ func CreateCPU() *CPU6502 {
 		{name: "CPX", op: CPX, modeType: "IMM", addrMode: IMM, cycles: 2}, {name: "SBC", op: SBC, modeType: "IDX", addrMode: IDX, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "CPX", op: CPX, modeType: "ZPI", addrMode: ZPI, cycles: 3}, {name: "SBC", op: SBC, modeType: "ZPI", addrMode: ZPI, cycles: 3}, {name: "INC", op: INC, modeType: "ZPI", addrMode: ZPI, cycles: 5}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "INX", op: INX, modeType: "IMP", addrMode: IMP, cycles: 2}, {name: "SBC", op: SBC, modeType: "IMM", addrMode: IMM, cycles: 2}, {name: "NOP", op: NOP, modeType: "IMP", addrMode: IMP, cycles: 2}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "CPX", op: CPX, modeType: "ABS", addrMode: ABS, cycles: 4}, {name: "SBC", op: SBC, modeType: "ABS", addrMode: ABS, cycles: 4}, {name: "INC", op: INC, modeType: "ABS", addrMode: ABS, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6},
 		{name: "BEQ", op: BEQ, modeType: "REL", addrMode: REL, cycles: 2}, {name: "SBC", op: SBC, modeType: "IDY", addrMode: IDY, cycles: 5}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "SBC", op: SBC, modeType: "ZPX", addrMode: ZPX, cycles: 4}, {name: "INC", op: INC, modeType: "ZPX", addrMode: ZPX, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "SED", op: SED, modeType: "IMP", addrMode: IMP, cycles: 2}, {name: "SBC", op: SBC, modeType: "ABY", addrMode: ABY, cycles: 4}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6}, {name: "SBC", op: SBC, modeType: "ABX", addrMode: ABX, cycles: 4}, {name: "INC", op: INC, modeType: "ABX", addrMode: ABX, cycles: 7}, {name: "NEX", op: NEX, modeType: "IMP", addrMode: IMP, cycles: 6},
 	}
-
 	//always set to 1
 	cpu.SetFlag(U, true)
 
@@ -96,7 +97,8 @@ func (cpu *CPU6502) Write(addr uint16, data uint8) {
 }
 
 func (cpu CPU6502) Read(addr uint16, readOnly bool) uint8 {
-	return cpu.bus.CPURead(addr, readOnly)
+	temp := cpu.bus.CPURead(addr, readOnly)
+	return temp
 }
 
 // sets the flag on the status registor for one of the values, if the flag is already set it unsets it
@@ -127,10 +129,20 @@ func (cpu *CPU6502) fetchData() {
 // these four functions can occur at any point in operation, and will go after the current instruction is complete
 // tells the cpu to advance one clock cycle
 func (cpu *CPU6502) Clock() {
+	//TODO breakpoint for passing first frame pass
+	if cpu.pc-1 >= 0xc7af {
+		fmt.Printf("")
+	}
 	if cpu.cycles == 0 {
 		cpu.opCode = cpu.Read(cpu.pc, false)
 		cpu.pc++
-		cpu.cycles = cpu.instructions[cpu.opCode].cycles + cpu.instructions[cpu.opCode].op(cpu) + cpu.instructions[cpu.opCode].addrMode(cpu)
+		fmt.Printf("%0x "+cpu.instructions[cpu.opCode].name+" %0x %0x\n", cpu.pc-1, cpu.Read(cpu.pc, false), cpu.Read(cpu.pc+1, false))
+		//get how many extra cycles in the address read and set the address
+		addrCycles := cpu.instructions[cpu.opCode].addrMode(cpu)
+		//get how many extra cycles in the CPU action and do the action
+		cpuCycles := cpu.instructions[cpu.opCode].op(cpu)
+		//add the given amount of cycles with any extra cycles
+		cpu.cycles = cpu.instructions[cpu.opCode].cycles + cpuCycles + addrCycles
 	}
 
 	cpu.cycles--
@@ -143,15 +155,15 @@ func (cpu *CPU6502) Reset() {
 	cpu.a = 0
 	cpu.x = 0
 	cpu.y = 0
-	//resets the stack pointer to the greatest value, should wrap around so shouldn't particularly matter where it's set but this makes sense
-	cpu.sptr = 0xff
+	//resets the stack pointer
+	cpu.sptr = 0xfd
 	cpu.status = 0
 	//make sure this is always set
 	cpu.SetFlag(U, true)
 
 	//default location to look for data when the cpu is reset
 	//program counter low byte = 0xfffc, high byte = 0xfffd
-	cpu.pc = (uint16(cpu.Read(0xfffc, false)) << 8) | uint16(cpu.Read(0xfffd, false))
+	cpu.pc = (uint16(cpu.Read(0xfffd, false)) << 8) | uint16(cpu.Read(0xfffc, false))
 
 	cpu.addrAbs = 0
 	cpu.addrRel = 0
@@ -169,7 +181,7 @@ func (cpu *CPU6502) IRQ() {
 	}
 
 	//store the program counter on the stack, both bytes, little endian
-	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0xff00))
+	cpu.Write(0x0100+uint16(cpu.sptr), uint8((cpu.pc&0xff00)>>8))
 	cpu.sptr--
 	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
 	cpu.sptr--
@@ -186,7 +198,7 @@ func (cpu *CPU6502) IRQ() {
 	cpu.sptr--
 
 	//moves program counter to known location after interrupt
-	cpu.pc = uint16(cpu.Read(0xfffe, false))<<8 | uint16(cpu.Read(0xffff, false))
+	cpu.pc = uint16(cpu.Read(0xffff, false)) | uint16(cpu.Read(0xfffe, false))<<8
 
 	//time taken
 	cpu.cycles = 7
@@ -195,7 +207,7 @@ func (cpu *CPU6502) IRQ() {
 // non maskable interrupt request, unable to be ignored
 func (cpu *CPU6502) NMI() {
 	//store the program counter on the stack, both bytes, little endian
-	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0xff00))
+	cpu.Write(0x0100+uint16(cpu.sptr), uint8((cpu.pc&0xff00)>>8))
 	cpu.sptr--
 	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
 	cpu.sptr--
@@ -212,7 +224,7 @@ func (cpu *CPU6502) NMI() {
 	cpu.sptr--
 
 	//moves program counter to known location after interrupt
-	cpu.pc = uint16(cpu.Read(0xfffa, false))<<8 | uint16(cpu.Read(0xfffb, false))
+	cpu.pc = uint16(cpu.Read(0xfffb, false)) | uint16(cpu.Read(0xfffa, false))<<8
 
 	//time taken
 	cpu.cycles = 8
@@ -336,7 +348,7 @@ func REL(cpu *CPU6502) uint8 {
 
 	//if the number is 128 or greater unsigned, convert it to the 2's complement 16 digit version
 	//because adresses are 16 bits, it needs to be converted when the value goes into the negative
-	if offset >= 128 {
+	if offset&0x0080 == 0x0080 {
 		offset |= 0xff00
 	}
 
@@ -422,7 +434,7 @@ func ADC(cpu *CPU6502) uint8 {
 	res := uint16(cpu.fetchedData) + uint16(cpu.a) + uint16(carryFlag)
 
 	//carry flag
-	cpu.SetFlag(C, res&0xff > 0)
+	cpu.SetFlag(C, res&0xff00 > 0)
 	//zero flag
 	cpu.SetFlag(Z, res == 0)
 
@@ -448,9 +460,7 @@ func ADC(cpu *CPU6502) uint8 {
 // and, operates on memory and accumulator
 func AND(cpu *CPU6502) uint8 {
 	cpu.fetchData()
-
 	cpu.a &= cpu.fetchedData
-
 	//zero flag
 	cpu.SetFlag(Z, cpu.a == 0)
 	//negative flag
@@ -611,8 +621,10 @@ func BPL(cpu *CPU6502) uint8 {
 
 // brk, break, generates an interrupt, stores the pc to the stack and sets the pc to 0xfffe and 0xffff and sets the break flag
 func BRK(cpu *CPU6502) uint8 {
+	cpu.pc++
+	cpu.SetFlag(I, true)
 	//store the program counter on the stack, both bytes, little endian
-	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0xff00))
+	cpu.Write(0x0100+uint16(cpu.sptr), uint8((cpu.pc&0xff00)>>8))
 	cpu.sptr--
 	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
 	cpu.sptr--
@@ -846,10 +858,9 @@ func JMP(cpu *CPU6502) uint8 {
 func JSR(cpu *CPU6502) uint8 {
 	cpu.pc--
 
-	//write the high byte to stack
-	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc>>8))
+	cpu.Write(0x0100+uint16(cpu.sptr), uint8((cpu.pc&0xff00)>>8))
 	cpu.sptr--
-	//write the low byte to stack
+
 	cpu.Write(0x0100+uint16(cpu.sptr), uint8(cpu.pc&0x00ff))
 	cpu.sptr--
 
@@ -862,7 +873,6 @@ func LDA(cpu *CPU6502) uint8 {
 	cpu.fetchData()
 
 	cpu.a = cpu.fetchedData
-
 	//zero
 	cpu.SetFlag(Z, cpu.a == 0)
 
@@ -1112,6 +1122,9 @@ func RTS(cpu *CPU6502) uint8 {
 	cpu.pc = uint16(hi)<<8 | uint16(low)
 
 	cpu.pc++
+	if cpu.sptr != 255 {
+		return 0
+	}
 	return 0
 }
 
@@ -1129,7 +1142,7 @@ func SBC(cpu *CPU6502) uint8 {
 	res := uint16(cpu.a) - uint16(cpu.fetchedData) - ^uint16(carryFlag)
 
 	//carry flag
-	cpu.SetFlag(C, res&0xff > 0)
+	cpu.SetFlag(C, res&0xff00 > 0)
 	//zero flag
 	cpu.SetFlag(Z, res == 0)
 
@@ -1175,6 +1188,9 @@ func SEI(cpu *CPU6502) uint8 {
 
 // sta, store accumulator, stores accumulator to memory
 func STA(cpu *CPU6502) uint8 {
+	if cpu.a != 0 {
+		fmt.Printf("")
+	}
 	cpu.Write(cpu.addrAbs, cpu.a)
 
 	return 0
@@ -1245,11 +1261,6 @@ func TXA(cpu *CPU6502) uint8 {
 // txs, transfer x to stack pointer, copies the x register to the stack pointer
 func TXS(cpu *CPU6502) uint8 {
 	cpu.sptr = cpu.x
-
-	//zero flag
-	cpu.SetFlag(Z, uint8(cpu.sptr&0xff) == 0)
-	//negative flag
-	cpu.SetFlag(N, uint8(cpu.sptr&0xff)&0x80 == 0x80)
 
 	return 0
 }

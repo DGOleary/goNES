@@ -1,6 +1,8 @@
 package nes
 
 import (
+	"fmt"
+
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -17,6 +19,8 @@ type PPU2C02 struct {
 
 	//list of SDL color structs that correspond to the colors the NES can produce
 	RGBPalette [64]sdl.Color
+	//SDL renderer that allows the PPU to draw
+	Renderer *sdl.Renderer
 
 	//current PPU cycle
 	Cycle uint32
@@ -57,6 +61,14 @@ type PPU2C02 struct {
 	bgNextAttrib uint8
 	bgNextLSB    uint8
 	bgNextMSB    uint8
+	//shifter registers
+	bgPatternShifterHigh   uint16
+	bgPatternShifterLow    uint16
+	bgAttributeShifterHigh uint16
+	bgAttributeShifterLow  uint16
+
+	//TODO test val
+	frame uint64
 }
 
 func CreatePPU() *PPU2C02 {
@@ -180,6 +192,11 @@ func (ppu *PPU2C02) ConnectBus(ptr *Bus) {
 	ppu.bus = ptr
 }
 
+// links a renderer to the PPU
+func (ppu *PPU2C02) ConnectRenderer(ptr *sdl.Renderer) {
+	ppu.Renderer = ptr
+}
+
 // connects cartridge to PPU and graphics memory
 func (ppu *PPU2C02) ConnectCartridge(cart *Cartridge) {
 	ppu.Cartridge = cart
@@ -192,6 +209,28 @@ func (ppu *PPU2C02) incrementMode() uint16 {
 	} else {
 		return uint16(32)
 	}
+}
+
+func (ppu *PPU2C02) Reset() {
+	ppu.Cycle = 0
+	ppu.AddressByte = 0
+	ppu.bgAttributeShifterHigh = 0
+	ppu.bgAttributeShifterLow = 0
+	ppu.bgNextAttrib = 0
+	ppu.bgNextId = 0
+	ppu.bgNextLSB = 0
+	ppu.bgNextMSB = 0
+	ppu.bgPatternShifterHigh = 0
+	ppu.bgPatternShifterLow = 0
+	ppu.fineX = 0
+	ppu.loopyTRAM = 0
+	ppu.loopyVRAM = 0
+	ppu.PPUADDR = 0
+	ppu.PPUCTRL = 0
+	ppu.PPUDATA = 0
+	ppu.PPUMASK = 0
+	ppu.PPUSCROLL = 0
+	ppu.PPUSTATUS = 0
 }
 
 // reads and writes from cpu memory
@@ -266,7 +305,7 @@ func (ppu *PPU2C02) CPURead(addr uint16, readOnly bool) uint8 {
 
 	case 2: //status reading from the status register does effect the value of it, it will clear bit 7 (vertical blank) along with the address latch bit (referred to in this program as the AddressByte) the value determing if the high or low byte is being written, some documentation says the unused bits is the old data buffer, no game uses that as far as I know but could be a source of bugs in the future (unlikely)
 		returnData = ppu.PPUSTATUS
-		ppu.PPUSTATUS &= 0x7f
+		ppu.PPUSTATUS &= 0x007f
 		ppu.AddressByte = 0
 	case 3: //OAM address
 
@@ -393,9 +432,151 @@ func (ppu PPU2C02) PPURead(addr uint16, readOnly bool) uint8 {
 }
 
 func (ppu *PPU2C02) Clock() {
+	//anonymous functions for the drawing operations
+
+	//this controls the increment for the X registers, making sure they wrap to the right values and increment to the next table when necessary
+	scrollXIncrement := func() {
+		//check if rendering the sprites is enabled
+		if ppu.PPUMASK&0x0008 == 0x0008 || ppu.PPUMASK&0x0010 == 0x0010 {
+			//check if a name table, which is 32 tiles long, needs to wrap around
+			if ppu.loopyVRAM&0b11111 == 31 {
+				//resets the coarseX to 0 and flips the nametable bit so it goes to the other table
+				//checks if the lower bit of the nametable flags is 1
+				if ppu.loopyVRAM&0x0400 == 0x0400 {
+					ppu.loopyVRAM &= 0x7be0
+				} else {
+					//set it to 1
+					ppu.loopyVRAM |= 0x0400
+				}
+			} else {
+				//gets the value at the coarseX register
+				coarseX := (ppu.loopyVRAM & 31) + 1
+				//clears the coarseX
+				ppu.loopyVRAM &= 0xffe0
+				//sets it to the new value
+				ppu.loopyVRAM |= coarseX
+			}
+		}
+	}
+
+	//same as above, but here for the Y registers
+	scrollYIncrement := func() {
+		//check if rendering the sprites is enabled
+		if ppu.PPUMASK&0x0008 == 0x0008 || ppu.PPUMASK&0x0010 == 0x0010 {
+			//check if fineY can be incremented
+			//get the fineY and move it over to the right so you can see the actual value
+			fineY := ((ppu.loopyVRAM & 0x7000) >> 12)
+			if fineY < 7 {
+				//add 1 to the number and move it back into the correct position
+				fineY++
+				//reset the fineY back to 0
+				ppu.loopyVRAM &= 0x0fff
+				//put in the fineY
+				ppu.loopyVRAM |= fineY
+			} else {
+				//get courseY in a number
+				coarseY := (ppu.loopyVRAM & 0x03e0) >> 5
+				//if the it goes over the height limit of 8 pixels, increment to the next
+
+				//reset the fineY back to 0
+				ppu.loopyVRAM &= 0x0fff
+
+				//table is 32x30 so when the coarseY reaches 29 it needs to roll over
+				if coarseY == 29 {
+					//reset coarseY to 0
+					ppu.loopyVRAM &= 0x7c1f
+					//flip the upper nametable bit
+					//if it's 1
+					if ppu.loopyVRAM&0x0800 == 0x0800 {
+						//set the bit to 0
+						ppu.loopyVRAM &= 0x77ff
+					} else {
+						//set it to 1
+						ppu.loopyVRAM |= 0x0800
+					}
+				} else if coarseY == 31 {
+					//30 and 31 are attribute memory, reset it if it goes into here
+					//reset coarseY to 0
+					ppu.loopyVRAM &= 0x7c1f
+				} else {
+					//no wrapping, so just increment
+					ppu.loopyVRAM |= ((coarseY + 1) << 5)
+				}
+			}
+		}
+	}
+
+	//move the temporary values into the actual VRAM registers
+	transferXRegisters := func() {
+		//check if rendering the sprites is enabled
+		if ppu.PPUMASK&0x0008 == 0x0008 || ppu.PPUMASK&0x0010 == 0x0010 {
+			//reset the lower nametable bit to 0
+			ppu.loopyVRAM &= 0x7bff
+			//get the lower nametable bit from the TRAM
+			ppu.loopyVRAM |= (ppu.loopyTRAM & 0x0400)
+			//clears the coarseX
+			ppu.loopyVRAM &= 0xffe0
+			//gets the coarseX from the TRAM
+			ppu.loopyVRAM |= (ppu.loopyTRAM & 31)
+		}
+	}
+
+	transferYRegisters := func() {
+		//check if rendering the sprites is enabled
+		if ppu.PPUMASK&0x0008 == 0x0008 || ppu.PPUMASK&0x0010 == 0x0010 {
+			//reset the fineY back to 0
+			ppu.loopyVRAM &= 0x0fff
+			//get the TRAM fineY
+			ppu.loopyVRAM |= (ppu.loopyTRAM & 0x7000)
+			//reset the nametable bit to 0
+			ppu.loopyVRAM &= 0x77ff
+			//get it from the TRAM
+			ppu.loopyVRAM |= (ppu.loopyTRAM & 0x0800)
+			//set the coarseY to 0
+			ppu.loopyVRAM &= 0x7c1f
+			//get it from the TRAM
+			ppu.loopyVRAM |= (ppu.loopyTRAM & 0x03e0)
+		}
+	}
+
+	loadBackgroundShifters := func() {
+		//each PPU tick one pixel is drawn, these shifters move along with the current pixel and the 15 next, the MSB is being drawn, but the fineX register can utilize other pixels so the entire register needs to be updated
+		//moves the current tiles into the MSB and the next tile into the LSB
+		ppu.bgPatternShifterLow = (ppu.bgPatternShifterLow & 0xff00) | uint16(ppu.bgNextLSB)
+		ppu.bgPatternShifterHigh = (ppu.bgPatternShifterHigh & 0x00ff) | uint16(ppu.bgNextMSB)
+
+		//attribute bits change every 8 pixels, but to synchronize them they can be blown up to an entire byte of the value
+		if ppu.bgNextAttrib&1 == 1 {
+			ppu.bgAttributeShifterLow = (ppu.bgAttributeShifterLow & 0xff00) | 0x00ff
+		} else {
+			ppu.bgAttributeShifterLow = (ppu.bgAttributeShifterLow & 0xff00) | 0x0000
+		}
+
+		if ppu.bgNextAttrib&2 == 2 {
+			ppu.bgAttributeShifterHigh = (ppu.bgAttributeShifterHigh & 0xff00) | 0x00ff
+		} else {
+			ppu.bgAttributeShifterHigh = (ppu.bgAttributeShifterHigh & 0xff00) | 0x0000
+		}
+	}
+
+	//every tick the shifters move theri contents by 1 to draw the next pixel
+	updateShifters := func() {
+		//check if render background is enabled
+		if ppu.PPUMASK&0x0008 == 0x0008 {
+			ppu.bgPatternShifterLow <<= 1
+			ppu.bgPatternShifterHigh <<= 1
+
+			ppu.bgAttributeShifterLow <<= 1
+			ppu.bgAttributeShifterHigh <<= 1
+		}
+	}
 
 	//actions that apply to most scanlines
 	if ppu.Scanline >= -1 && ppu.Scanline < 240 {
+		//skip this frame
+		if ppu.Scanline == 0 && ppu.Cycle == 0 {
+			ppu.Cycle = 1
+		}
 
 		//this is when Vblank ends, back to the top left of the screen
 		if ppu.Scanline == -1 && ppu.Cycle == 1 {
@@ -404,8 +585,12 @@ func (ppu *PPU2C02) Clock() {
 		}
 
 		if (ppu.Cycle >= 2 && ppu.Cycle < 258) || (ppu.Cycle >= 321 && ppu.Cycle < 338) {
+			updateShifters()
+
 			switch (ppu.Cycle - 1) % 8 {
 			case 0:
+				//when a tile has looped, load new shifters
+				loadBackgroundShifters()
 				ppu.bgNextId = ppu.PPURead(0x2000|(ppu.loopyVRAM&0x0fff), false)
 			case 2:
 				ppu.bgNextAttrib = ppu.PPURead(0x23c0|((ppu.loopyVRAM&2)<<11)|((ppu.loopyVRAM&1)<<10)|(((ppu.loopyVRAM&0b1111100000)>>2)<<3)|((ppu.loopyVRAM&0b11111)>>2), false)
@@ -420,12 +605,29 @@ func (ppu *PPU2C02) Clock() {
 				ppu.bgNextLSB = ppu.PPURead((uint16(ppu.PPUCTRL&0b10000)<<12)+(uint16(ppu.bgNextId)<<4)+(ppu.loopyVRAM&0x7000), false)
 			case 6:
 				ppu.bgNextMSB = ppu.PPURead((uint16(ppu.PPUCTRL&0b10000)<<12)+(uint16(ppu.bgNextId)<<4)+((ppu.loopyVRAM&0x7000)+8), false)
+			case 7:
+				//done with 8 pixels, go to next 8
+				scrollXIncrement()
 			}
 		}
-
+		//done with a row, go to next Y
 		if ppu.Cycle == 256 {
-
+			scrollYIncrement()
 		}
+
+		//reset X registers
+		if ppu.Cycle == 256 {
+			transferXRegisters()
+		}
+
+		//ready for new frame
+		if ppu.Scanline == -1 && ppu.Cycle >= 280 && ppu.Cycle < 305 {
+			transferYRegisters()
+		}
+	}
+
+	if ppu.Scanline == 240 {
+		//here to signify that scanline 240 takes no actions
 	}
 
 	//this is when Vblank starts
@@ -438,6 +640,48 @@ func (ppu *PPU2C02) Clock() {
 		}
 	}
 
+	//the 2 bit pixel being rendered
+	bgPixel := uint8(0)
+	//the 3 bit index of the palette
+	bgPalette := uint8(0)
+
+	//check if background rendering is enabled
+	if ppu.PPUMASK&0x0008 == 0x0008 {
+		//selects the relevant bit using fineX offset
+		bit := uint16(0x8000) >> ppu.fineX
+
+		//select the bitplane bixesl by using the pattern shifter
+		pixelPlane0 := 0
+		pixelPlane1 := 0
+		if (ppu.bgPatternShifterLow & bit) > 0 {
+			pixelPlane0 = 1
+		}
+
+		if (ppu.bgPatternShifterHigh & bit) > 0 {
+			pixelPlane1 = 1
+		}
+
+		bgPalette = (uint8(pixelPlane1) << 1) | uint8(pixelPlane0)
+
+		if ppu.frame >= 4 {
+			fmt.Println(ppu.frame)
+		}
+	}
+
+	//fmt.Println(bgPalette)
+	//fmt.Println(bgPixel)
+	pixelColor := ppu.GetColorFromPalette(bgPalette, bgPixel)
+	//fmt.Println(pixelColor)
+	//fmt.Println(ppu.Cycle - 1)
+	//fmt.Println(ppu.Scanline)
+	ppu.Renderer.SetDrawColor(pixelColor.R, pixelColor.G, pixelColor.B, pixelColor.A)
+	ppu.Renderer.DrawPoint(int32(ppu.Cycle)-1, int32(ppu.Scanline))
+	//ppu.Renderer.Present()
+
+	// if ppu.Scanline > 0 && (ppu.Scanline%50 == 0 && ppu.Cycle%50 == 0) {
+	// 	temp := 0
+	// 	temp++
+	// }
 	ppu.Cycle++
 	//each scanline lasts for 341 PPU cycles
 	if ppu.Cycle >= 341 {
@@ -446,9 +690,10 @@ func (ppu *PPU2C02) Clock() {
 
 		//how many scanlines per frame
 		if ppu.Scanline >= 261 {
+			ppu.frame++
 			ppu.Scanline = -1
 			ppu.Complete = true
+			//TODO make accurate time
 		}
 	}
-
 }
